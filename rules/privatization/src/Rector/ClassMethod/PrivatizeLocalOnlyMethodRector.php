@@ -12,6 +12,7 @@ use PhpParser\Node\Stmt\ClassMethod;
 use PHPStan\Type\TypeWithClassName;
 use PHPUnit\Framework\TestCase;
 use Rector\BetterPhpDocParser\PhpDocInfo\PhpDocInfo;
+use Rector\Caching\Contract\Rector\ZeroCacheRectorInterface;
 use Rector\Core\Rector\AbstractRector;
 use Rector\Core\RectorDefinition\CodeSample;
 use Rector\Core\RectorDefinition\RectorDefinition;
@@ -24,7 +25,7 @@ use ReflectionMethod;
 /**
  * @see \Rector\Privatization\Tests\Rector\ClassMethod\PrivatizeLocalOnlyMethodRector\PrivatizeLocalOnlyMethodRectorTest
  */
-final class PrivatizeLocalOnlyMethodRector extends AbstractRector
+final class PrivatizeLocalOnlyMethodRector extends AbstractRector implements ZeroCacheRectorInterface
 {
     /**
      * @var MethodCallParsedNodesFinder

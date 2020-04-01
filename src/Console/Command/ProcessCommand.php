@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Rector\Core\Console\Command;
 
+use Rector\Caching\ChangedFilesDetector;
+use Rector\Caching\UnchangedFilesFilter;
 use Rector\ChangesReporting\Application\ErrorAndDiffCollector;
 use Rector\ChangesReporting\Output\ConsoleOutputFormatter;
 use Rector\Core\Application\RectorApplication;
@@ -21,6 +23,7 @@ use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\Console\Style\SymfonyStyle;
 use Symplify\PackageBuilder\Console\Command\CommandNaming;
 use Symplify\PackageBuilder\Console\ShellCode;
 
@@ -92,6 +95,21 @@ final class ProcessCommand extends AbstractCommand
     private $yamlProcessor;
 
     /**
+     * @var UnchangedFilesFilter
+     */
+    private $unchangedFilesFilter;
+
+    /**
+     * @var ChangedFilesDetector
+     */
+    private $changedFilesDetector;
+
+    /**
+     * @var SymfonyStyle
+     */
+    private $symfonyStyle;
+
+    /**
      * @param string[] $paths
      * @param string[] $fileExtensions
      */
@@ -107,6 +125,9 @@ final class ProcessCommand extends AbstractCommand
         RectorNodeTraverser $rectorNodeTraverser,
         StubLoader $stubLoader,
         YamlProcessor $yamlProcessor,
+        ChangedFilesDetector $changedFilesDetector,
+        UnchangedFilesFilter $unchangedFilesFilter,
+        SymfonyStyle $symfonyStyle,
         array $paths,
         array $fileExtensions
     ) {
@@ -122,9 +143,12 @@ final class ProcessCommand extends AbstractCommand
         $this->rectorNodeTraverser = $rectorNodeTraverser;
         $this->stubLoader = $stubLoader;
         $this->paths = $paths;
+        $this->yamlProcessor = $yamlProcessor;
+        $this->unchangedFilesFilter = $unchangedFilesFilter;
 
         parent::__construct();
-        $this->yamlProcessor = $yamlProcessor;
+        $this->changedFilesDetector = $changedFilesDetector;
+        $this->symfonyStyle = $symfonyStyle;
     }
 
     protected function configure(): void
@@ -193,6 +217,10 @@ final class ProcessCommand extends AbstractCommand
             InputOption::VALUE_REQUIRED,
             'Location for file to dump result in. Useful for Docker or automated processes'
         );
+
+        $this->addOption(Option::CACHE_DEBUG, null, InputOption::VALUE_NONE, 'Debug changed file cache');
+
+        $this->addOption(Option::OPTION_CLEAR_CACHE, null, InputOption::VALUE_NONE, 'Clear unchaged files cache');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -215,10 +243,34 @@ final class ProcessCommand extends AbstractCommand
 
         $this->additionalAutoloader->autoloadWithInputAndSource($input, $source);
 
+        // cache stuff
+        if ($this->configuration->shouldClearCache()) {
+            $this->changedFilesDetector->clear();
+        }
+
+        if ($this->configuration->isCacheDebug()) {
+            $this->symfonyStyle->note(sprintf('[cache] %d files before cache filter', count($phpFileInfos)));
+        }
+
+        $phpFileInfos = $this->unchangedFilesFilter->filterAndJoinWithDependentFileInfos($phpFileInfos);
+
+        if ($this->configuration->isCacheDebug()) {
+            $this->symfonyStyle->note(sprintf('[cache] %d files after cache filter', count($phpFileInfos)));
+            $this->symfonyStyle->listing($phpFileInfos);
+        }
+
         // yaml
         $this->yamlProcessor->run();
 
+        $this->configuration->setFileInfos($phpFileInfos);
         $this->rectorApplication->runOnFileInfos($phpFileInfos);
+
+        if ($this->rectorNodeTraverser->hasZeroCacheRectors()) {
+            $this->symfonyStyle->note(sprintf(
+                'Ruleset contains %d rules that need "--clear-cache" option to analyse full project',
+                $this->rectorNodeTraverser->getZeroCacheRectorCount()
+            ));
+        }
 
         // report diffs and errors
         $outputFormat = (string) $input->getOption(Option::OPTION_OUTPUT_FORMAT);
@@ -226,6 +278,11 @@ final class ProcessCommand extends AbstractCommand
         $outputFormatter->report($this->errorAndDiffCollector);
 
         $this->reportingExtensionRunner->run();
+
+        // invalidate affected files
+        foreach ($this->errorAndDiffCollector->getAffectedFileInfos() as $affectedFileInfo) {
+            $this->changedFilesDetector->invalidateFile($affectedFileInfo);
+        }
 
         // some errors were found → fail
         if ($this->errorAndDiffCollector->getErrors() !== []) {
