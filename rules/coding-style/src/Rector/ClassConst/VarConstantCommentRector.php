@@ -65,11 +65,9 @@ PHP
             return null;
         }
 
-        if ($constStaticType instanceof ConstantArrayType) {
-            // skip big constants
-            if (count($constStaticType->getValueTypes()) > 5) {
-                return null;
-            }
+        // skip big constants
+        if ($constStaticType instanceof ConstantArrayType && count($constStaticType->getValueTypes()) > 5) {
+            return null;
         }
 
         /** @var PhpDocInfo $phpDocInfo */
